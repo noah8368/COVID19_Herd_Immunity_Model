@@ -1,97 +1,108 @@
+# Model the percentage of US population with some degree of COVID19 immunity
+
 # Written 22 Jan 2021
 # By Noah Himed
 
+import argparse
+from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
-import datetime as dt
 
-# https://www.worldometers.info/world-population/us-population/#:~:text=the%20United%20States%202020%20population,(and%20dependencies)%20by%20population.
-US_POP = 332110000.0
-# https://www.cdc.gov/coronavirus/2019-ncov/cases-updates/burden.html
-RECOVERED_POP = 83100000.0
-# https://wwwnc.cdc.gov/eid/article/26/7/20-0282_article?deliveryName=USCDC_333-DM25287
-ORIG_R0 = 5.7
-# https://www.nytimes.com/2020/12/31/health/coronavirus-variant-transmission.html
-NEW_VARIANT_TRANSMISSION_BOOST = 1.56
-# https://ourworldindata.org/covid-vaccinations
-VACCINATED_POPULATION = 17550000.0
-# https://covidtracking.com/data/charts/us-daily-positive
-CASES_PER_DAY = 184864.0
-# https://jamanetwork.com/journals/jamainternalmedicine/fullarticle/2768834?guestAccessKey=7a5c32e6-3c27-41b3-b46c-43c4a38bbe00&utm_source=For_The_Media&utm_medium=referral&utm_campaign=ftm_links&utm_content=tfl&utm_term=072120
-# since testing has increased in capacity, number of unreported cases will be
-# estimated to be half that of what it was in March-May. A conservative estimate
-# for this latter figure is 5/6, so we'll use 5/12.
-PERCENT_UNREPORTED_CASES = 5.0/12.0
-# https://www.statnews.com/2020/12/19/a-side-by-side-comparison-of-the-pfizer-biontech-and-moderna-vaccines/
-PFIZER_EFFICACY = 0.95
-MODERNA_EFFICACY = 0.9425
-# https://ourworldindata.org/covid-vaccinations
-DAILY_VAC_RATE = 1000000
-# ngl kinda just pulled these outta my ass
-REINFECTION_RATE = 0.05
-DAILY_VAX_INCREASE = 10000
-MAX_VAX_CAPACITY = 3000000
+HERD_IMMUNITY_PERCENT = 0.75
 
-VAX_RECORD = []
-INFECTION_RECORD = []
-HERD_RECORD = []
+# Define a class to model the population of the vaccinated and recovered population
+class Model:
+    def __init__(self, total_pop, recovered_pop, vax_pop, vax_rate):
+        # Check that user-entered parameters are in valid ranges
+        if total_pop < 0:
+            raise ValueError("Total population must be positive")
+        if recovered_pop < 0:
+            raise ValueError("Recovered population must be positive")
+        elif recovered_pop > total_pop:
+            raise ValueError("Recovered population must be less than 330M")
+        if vax_pop < 0:
+            raise ValueError("Vaccinated population must be positive")
+        elif vax_pop > total_pop:
+            raise ValueError("Vaccinated population must be less than 330M")
+        if vax_pop < 0:
+            raise ValueError("Vaccination rate must be positive")
+        elif vax_pop > total_pop:
+            raise ValueError("Vaccination rate must be less than 330M/day")
 
-def herd_immunity_pop(r0):
-  return US_POP*(1 - (1/r0))
+        self.total_pop = total_pop
+        self.vax_pop = vax_pop
+        self.vax_rate = vax_rate
+        self.recovered_pop = recovered_pop
+        self.prob_recovered = recovered_pop/total_pop
+        # Keep track of the portion of the US that has been infection/vaccinated
+        initial_immune_pop = vax_pop * (1 - self.prob_recovered) + recovered_pop
+        self.immune_pop_log = [initial_immune_pop/total_pop]
 
-R0 = ORIG_R0*NEW_VARIANT_TRANSMISSION_BOOST
-HERD_IMMUNITY_THRESHOLD = herd_immunity_pop(R0)
+    def get_percent_immune(self):
+        return self.immune_pop_log[-1]
 
-def vax_rate(t):
-  return min(DAILY_VAC_RATE + DAILY_VAX_INCREASE*t, MAX_VAX_CAPACITY)
+    def get_sim_length(self):
+        return len(self.immune_pop_log)
 
-def vaccine_protected_pop(t, efficacy):
-  daily_vax = vax_rate(t)
-  global VACCINATED_POPULATION
-  VACCINATED_POPULATION += daily_vax
-  return efficacy*(VACCINATED_POPULATION)
+    def add_daily_vax(self):
+        if (self.vax_pop + self.vax_rate <= self.total_pop):
+            self.vax_pop += self.vax_rate
+            # Subtract off vaccinated population that has recovered from COVID19
+            only_vax_pop = self.vax_pop * (1 - self.prob_recovered)
+            immune_pop = only_vax_pop + self.recovered_pop + self.immune_pop_log[-1]
+            self.immune_pop_log.append(immune_pop/self.total_pop)
 
-def infection_protected_pop(t, infection_rate, reinfection_prob):
-  return (1-reinfection_prob)*(infection_rate*t + RECOVERED_POP)
+    def plot_immunity(self):
+        # Create a list of date labels
+        day_count = range(len(self.immune_pop_log))
+        dates = []
+        today = datetime.today()
+        for count in day_count:
+            day = today + timedelta(days=count)
+            date = day.strftime("%d %b %Y")
+            dates.append(date)
 
-def vaccinated_infected_pop(vac_pop, recovered_pop):
-  return (vac_pop*recovered_pop)/US_POP
+        fig, ax = plt.subplots()
+        ax.plot_date(dates, self.immune_pop_log, color='g', linestyle='-',
+                      label="Immune portion of population")
+        ax.axhline(y=HERD_IMMUNITY_PERCENT, color='r', linestyle='-',
+                    label="Herd Immunity Threshold")
+        ax.set_title("Growth of COVID19 Immunity")
+        ax.set_xlabel("Time")
+        plt.xticks(rotation=60)
+        spacing = 2
+        for label in ax.xaxis.get_ticklabels()[::spacing]:
+            label.set_visible(False)
+        ax.set_ylabel("Percent of US Population")
+        plt.legend()
+        plt.show()
 
-def people_left(t, r0, avg_cases_until_end, vaccine_efficacy):
-  inf_pop = infection_protected_pop(t, avg_cases_until_end, REINFECTION_RATE)
-  global INFECTION_RECORD
-  INFECTION_RECORD.append(inf_pop)
-  vax_pop = vaccine_protected_pop(t, vaccine_efficacy)
-  global VAX_RECORD
-  VAX_RECORD.append(vax_pop)
-  inf_vax_overlap = vaccinated_infected_pop(vax_pop, inf_pop)
-  global HERD_IMMUNITY_THRESHOLD
-  herd_size = HERD_IMMUNITY_THRESHOLD - vax_pop - inf_pop + inf_vax_overlap
-  HERD_RECORD.append(herd_size)
-  return herd_size
 
-vaccine_efficacy = (PFIZER_EFFICACY + MODERNA_EFFICACY)/2
-avg_cases_until_end = (CASES_PER_DAY*(1 + PERCENT_UNREPORTED_CASES))/2
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("POPULATION", help="Size of studied population in \
+                        millions",
+                        type=float)
+    parser.add_argument("RECOVERED", help="Number of recovered individuals in \
+                        millions",
+                        type=float)
+    parser.add_argument("VACCINATED", help="Number of vaccinated individuals in \
+                        millions",
+                        type=float)
+    parser.add_argument("RATE", help="Vaccination rate in millions/day", type=float)
+    parser.add_argument("-p", "--plot",
+                        help="Plot the portion of immune people in the simulation",
+                        action="store_true")
+    args = parser.parse_args()
 
-days_from_now = 0
+    model = Model(args.POPULATION, args.RECOVERED, args.VACCINATED, args.RATE)
 
-herd_pop = people_left(days_from_now, R0, avg_cases_until_end, vaccine_efficacy)
-while herd_pop > 0:
-  days_from_now += 1
-  herd_pop = people_left(days_from_now, R0, avg_cases_until_end, vaccine_efficacy)
+    # Add vaccinations until the herd immunity threshold has been reached
+    percent_immune = model.get_percent_immune()
+    while percent_immune < HERD_IMMUNITY_PERCENT:
+        model.add_daily_vax()
+        percent_immune = model.get_percent_immune()
+    prediction = model.get_sim_length()
 
-time = range(days_from_now+1)
-plt.plot(time, VAX_RECORD, color="green", label="Protected by Vaccination")
-plt.plot(time, INFECTION_RECORD, color="red", label="Protected by Infection")
-plt.plot(time, HERD_RECORD, color="blue", label="People Left to Protect")
-plt.xlabel("Days From Today")
-plt.ylabel("People in 100s of Millions")
-plt.title("Immunized Population Growth in US")
-plt.legend()
-plt.show()
-
-print("Prediction: The US will reach herd immunity", str(days_from_now), "days from today on", str(dt.date.today() + dt.timedelta(days=days_from_now)))
-print("This model assumes an r_0 of", str(round(R0, 2)), "in a world without any restritions, requiring ~"+str(int(HERD_IMMUNITY_THRESHOLD)),
-      "people to become immunized through infection or vaccination.")
-print("This model uses the the current vaccination rate of ~"+str(DAILY_VAC_RATE), "people/day and a projected linear increase in this number by", DAILY_VAX_INCREASE,
-      "additional people per day\nin addition to a calculated average of ~"+str(round(CASES_PER_DAY)), "infections per day through the end of the pandemic.")
-print("The model also assumes a maximum vaccination capacity of ~"+str(MAX_VAX_CAPACITY), "people/day. These predictions are very informal and should be taken with a grain of salt.")
+    print("Prediction: ", str(prediction), "days")
+    if (args.plot):
+        model.plot_immunity()
